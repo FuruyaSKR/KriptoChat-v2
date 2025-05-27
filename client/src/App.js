@@ -24,7 +24,10 @@ function Chat() {
     socket.current = io(socketURL);
 
     socket.current.on("mensagem", (msg) => {
-      if (msg.type === "login" && msg.content === "LOGIN ACEITO") {
+      if (msg.type === "internal") {
+        return;
+      }
+      if (msg.type === "login") {
         enqueueSnackbar("Login realizado com sucesso!", { variant: "success" });
         socket.current.emit("mensagem", "/lista clientes");
         return;

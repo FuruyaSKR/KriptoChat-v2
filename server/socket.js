@@ -41,14 +41,6 @@ function configurarSockets(server) {
   io.on("connection", (socket) => {
     console.log(`[+] Cliente conectado: ${socket.id}`);
 
-    socket.emit(
-      "mensagem",
-      createMessage({
-        type: "system",
-        content: comandos.LOGIN_TELA,
-      })
-    );
-
     socket.on("mensagem", (mensagem) => {
       const cliente = clientes.get(socket.id);
 
@@ -151,7 +143,7 @@ function configurarSockets(server) {
           socket.emit(
             "mensagem",
             createMessage({
-              type: "system",
+              type: "internal",
               content: `Digite a mensagem para ${nomeDest}:`,
             })
           );
