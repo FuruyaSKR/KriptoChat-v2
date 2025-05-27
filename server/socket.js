@@ -13,6 +13,26 @@ function createMessage({ type, author = null, content, recipient = null }) {
   };
 }
 
+// Notifica todos os logados com a nova lista
+function broadcastUserList() {
+  const nomes = [...clientes.values()]
+    .filter((c) => c.isLoggedIn)
+    .map((c) => c.nome)
+    .join(", ");
+
+  for (const c of clientes.values()) {
+    if (c.isLoggedIn) {
+      c.socket.emit(
+        "mensagem",
+        createMessage({
+          type: "system",
+          content: `Usuários online: ${nomes}`,
+        })
+      );
+    }
+  }
+}
+
 function configurarSockets(server) {
   const io = new Server(server, {
     cors: { origin: "*" },
@@ -84,6 +104,7 @@ function configurarSockets(server) {
               );
             }
           }
+          broadcastUserList();
         }
         return;
       }
@@ -175,9 +196,9 @@ function configurarSockets(server) {
 
     socket.on("disconnect", () => {
       const cliente = clientes.get(socket.id);
+
       if (cliente && cliente.isLoggedIn) {
         console.log(`[-] ${cliente.nome} saiu.`);
-        clientes.delete(socket.id);
 
         for (const c of clientes.values()) {
           if (c.isLoggedIn) {
@@ -192,6 +213,9 @@ function configurarSockets(server) {
           }
         }
       }
+
+      clientes.delete(socket.id);
+      broadcastUserList();
     });
   });
 }

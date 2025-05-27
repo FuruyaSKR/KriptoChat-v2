@@ -7,6 +7,7 @@ const socketURL = "http://localhost:8888";
 function Chat() {
   const socket = useRef(null);
   const chatEndRef = useRef(null);
+  const nicknameRef = useRef("");
   const { enqueueSnackbar } = useSnackbar();
 
   const [nickname, setNickname] = useState("");
@@ -18,44 +19,46 @@ function Chat() {
   const [privateChats, setPrivateChats] = useState({});
 
   useEffect(() => {
+    if (socket.current) return;
+
     socket.current = io(socketURL);
 
     socket.current.on("mensagem", (msg) => {
       if (msg.type === "login" && msg.content === "LOGIN ACEITO") {
         enqueueSnackbar("Login realizado com sucesso!", { variant: "success" });
-        // Solicita lista de usuários
         socket.current.emit("mensagem", "/lista clientes");
+        return;
       }
 
       if (
         msg.type === "system" &&
         msg.content.startsWith("Usuários online: ")
       ) {
-        const nomes = msg.content.replace("Usuários online: ", "").split(", ");
-        setOnlineUsers(nomes.filter((nome) => nome !== nickname));
+        const nomes = msg.content
+          .replace("Usuários online: ", "")
+          .split(", ")
+          .filter((nome) => nome && nome !== nicknameRef.current);
+
+        if (nomes.length > 0) {
+          setOnlineUsers(nomes);
+        } else {
+          setOnlineUsers([]);
+        }
+
         return;
       }
 
-      // PRIVADA
       if (msg.type === "private" && msg.author !== nickname) {
-        setPrivateChats((prev) => {
-          const current = prev[msg.author] || [];
-          return {
-            ...prev,
-            [msg.author]: [...current, msg],
-          };
-        });
+        setPrivateChats((prev) => ({
+          ...prev,
+          [msg.author]: [...(prev[msg.author] || []), msg],
+        }));
         return;
       }
 
-      // PÚBLICA ou sistema
       setChat((prev) => [...prev, msg]);
     });
-
-    return () => {
-      socket.current.disconnect();
-    };
-  }, []);
+  }, [nickname]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -93,8 +96,12 @@ function Chat() {
     setMensagem("");
   };
 
+  const handleNicknameChange = (e) => {
+    setNickname(e.target.value);
+    nicknameRef.current = e.target.value;
+  };
+
   const handleLogin = () => {
-    console.log(`🚀 ~ Teste ~ handleLogin:`);
     if (nickname.trim()) {
       socket.current.emit("mensagem", nickname);
       setLoggedIn(true);
@@ -175,7 +182,7 @@ function Chat() {
           <input
             placeholder="Digite seu nickname"
             value={nickname}
-            onChange={(e) => setNickname(e.target.value)}
+            onChange={handleNicknameChange}
           />
           <button onClick={handleLogin}>Entrar</button>
         </>
@@ -185,31 +192,33 @@ function Chat() {
             Chat {selectedUser ? `(privado com ${selectedUser})` : "(público)"}
           </h2>
 
-          <div style={{ marginBottom: 10 }}>
-            <strong>Usuários online:</strong>{" "}
-            {onlineUsers.map((user) => (
-              <button
-                key={user}
-                onClick={() => iniciarChatPrivado(user)}
-                style={{
-                  marginRight: 8,
-                  padding: "2px 6px",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                }}
-              >
-                {user}
-              </button>
-            ))}
-            {selectedUser && (
-              <button
-                onClick={() => setSelectedUser(null)}
-                style={{ marginLeft: 10 }}
-              >
-                Voltar ao chat público
-              </button>
-            )}
-          </div>
+          {onlineUsers.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <strong>Usuários online:</strong>
+              {onlineUsers.map((user) => (
+                <button
+                  key={user}
+                  onClick={() => iniciarChatPrivado(user)}
+                  style={{
+                    marginRight: 8,
+                    padding: "2px 6px",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  {user}
+                </button>
+              ))}
+              {selectedUser && (
+                <button
+                  onClick={() => setSelectedUser(null)}
+                  style={{ marginLeft: 10 }}
+                >
+                  Voltar ao chat público
+                </button>
+              )}
+            </div>
+          )}
 
           <div
             style={{
