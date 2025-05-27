@@ -1,19 +1,28 @@
 const { Server } = require("socket.io");
 const comandos = require("./commands");
+const { gerarChave, criptografar } = require("./criptografia");
 
 const clientes = new Map(); // socket.id => { nome, socket, isLoggedIn, destinatarioPrivado }
 
-function createMessage({ type, author = null, content, recipient = null }) {
+function createMessage({
+  type,
+  author = null,
+  content,
+  recipient = null,
+  iv = null,
+  chave = null,
+}) {
   return {
     type,
     author,
     content,
     recipient,
+    iv,
+    chave,
     timestamp: Date.now(),
   };
 }
 
-// Notifica todos os logados com a nova lista
 function broadcastUserList() {
   const nomes = [...clientes.values()]
     .filter((c) => c.isLoggedIn)
@@ -83,7 +92,6 @@ function configurarSockets(server) {
 
           console.log(`[LOGIN] ${nome} entrou.`);
 
-          // Notifica os outros
           for (const c of clientes.values()) {
             if (c.isLoggedIn && c.socket.id !== socket.id) {
               c.socket.emit(
@@ -151,24 +159,69 @@ function configurarSockets(server) {
         return;
       }
 
+      // COMANDO /tellcript <nome>
+      if (mensagem.startsWith(comandos.MENSAGEM_CRIPT)) {
+        const nomeDest = mensagem.slice(comandos.MENSAGEM_CRIPT.length).trim();
+        const destino = [...clientes.values()].find((c) => c.nome === nomeDest);
+
+        if (!destino) {
+          socket.emit(
+            "mensagem",
+            createMessage({
+              type: "system",
+              content: `Usuário ${nomeDest} não encontrado.`,
+            })
+          );
+        } else {
+          clienteAtual.destinatarioPrivado = nomeDest;
+          clienteAtual.useCrypto = true;
+
+          socket.emit(
+            "mensagem",
+            createMessage({
+              type: "internal",
+              content: `Digite a mensagem criptografada para ${nomeDest}:`,
+            })
+          );
+        }
+        return;
+      }
+
       // MENSAGEM PRIVADA se destinatário estiver setado
       if (clienteAtual.destinatarioPrivado) {
         const nomeDest = clienteAtual.destinatarioPrivado;
         const destino = [...clientes.values()].find((c) => c.nome === nomeDest);
 
         if (destino && destino.isLoggedIn) {
-          const msgPrivada = createMessage({
-            type: "private",
-            author: nome,
-            recipient: nomeDest,
-            content: mensagem,
-          });
+          let msgPrivada;
 
-          destino.socket.emit("mensagem", msgPrivada); // para o destinatário
-          socket.emit("mensagem", msgPrivada); // feedback para o remetente
+          if (clienteAtual.useCrypto) {
+            const chave = gerarChave();
+            const resultado = criptografar(mensagem, chave);
+
+            msgPrivada = createMessage({
+              type: "private",
+              author: nome,
+              recipient: nomeDest,
+              content: resultado.conteudo,
+              iv: resultado.iv,
+              chave: resultado.chave,
+            });
+          } else {
+            msgPrivada = createMessage({
+              type: "private",
+              author: nome,
+              recipient: nomeDest,
+              content: mensagem,
+            });
+          }
+
+          destino.socket.emit("mensagem", msgPrivada);
+          socket.emit("mensagem", msgPrivada);
         }
 
-        clienteAtual.destinatarioPrivado = null; // limpa o estado
+        clienteAtual.destinatarioPrivado = null;
+        clienteAtual.useCrypto = false;
         return;
       }
 

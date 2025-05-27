@@ -1,8 +1,41 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { SnackbarProvider, useSnackbar } from "notistack";
+import CryptoJS from "crypto-js";
 
 const socketURL = "http://localhost:8888";
+
+function gerarChaveAES() {
+  const chave = CryptoJS.lib.WordArray.random(16);
+  const iv = CryptoJS.lib.WordArray.random(16);
+  return { chave, iv };
+}
+
+function criptografarAES(texto, chave, iv) {
+  const encrypted = CryptoJS.AES.encrypt(texto, chave, {
+    iv: iv,
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.Pkcs7,
+  });
+  return encrypted.ciphertext.toString(CryptoJS.enc.Hex);
+}
+
+function descriptografarAES({ content, chave, iv }) {
+  const key = CryptoJS.enc.Hex.parse(chave);
+  const ivBytes = CryptoJS.enc.Hex.parse(iv);
+  const encrypted = CryptoJS.enc.Hex.parse(content);
+  const ciphertext = CryptoJS.lib.CipherParams.create({
+    ciphertext: encrypted,
+  });
+
+  const decrypted = CryptoJS.AES.decrypt(ciphertext, key, {
+    iv: ivBytes,
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.Pkcs7,
+  });
+
+  return decrypted.toString(CryptoJS.enc.Utf8);
+}
 
 function Chat() {
   const socket = useRef(null);
@@ -13,10 +46,11 @@ function Chat() {
   const [nickname, setNickname] = useState("");
   const [loggedIn, setLoggedIn] = useState(false);
   const [mensagem, setMensagem] = useState("");
-  const [chat, setChat] = useState([]); // chat público
+  const [chat, setChat] = useState([]);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
   const [privateChats, setPrivateChats] = useState({});
+  const [useCrypto, setUseCrypto] = useState(false);
 
   useEffect(() => {
     if (socket.current) return;
@@ -24,9 +58,8 @@ function Chat() {
     socket.current = io(socketURL);
 
     socket.current.on("mensagem", (msg) => {
-      if (msg.type === "internal") {
-        return;
-      }
+      if (msg.type === "internal") return;
+
       if (msg.type === "login") {
         enqueueSnackbar("Login realizado com sucesso!", { variant: "success" });
         socket.current.emit("mensagem", "/lista clientes");
@@ -42,19 +75,17 @@ function Chat() {
           .split(", ")
           .filter((nome) => nome && nome !== nicknameRef.current);
 
-        if (nomes.length > 0) {
-          setOnlineUsers(nomes);
-        } else {
-          setOnlineUsers([]);
-        }
-
+        setOnlineUsers(nomes.length > 0 ? nomes : []);
         return;
       }
 
-      if (msg.type === "private" && msg.author !== nickname) {
+      if (msg.type === "private") {
+        const outroUsuario =
+          msg.author === nickname ? msg.recipient : msg.author;
+
         setPrivateChats((prev) => ({
           ...prev,
-          [msg.author]: [...(prev[msg.author] || []), msg],
+          [outroUsuario]: [...(prev[outroUsuario] || []), msg],
         }));
         return;
       }
@@ -70,9 +101,13 @@ function Chat() {
   const enviarMensagem = () => {
     if (!mensagem.trim()) return;
 
-    // Envio privado
     if (selectedUser) {
-      socket.current.emit("mensagem", `/tell ${selectedUser}`);
+      const comando = useCrypto
+        ? `/tellcript ${selectedUser}`
+        : `/tell ${selectedUser}`;
+
+      socket.current.emit("mensagem", comando);
+
       socket.current.once("mensagem", () => {
         socket.current.emit("mensagem", mensagem);
 
@@ -82,6 +117,7 @@ function Chat() {
           content: mensagem,
           recipient: selectedUser,
           timestamp: Date.now(),
+          ...(useCrypto && { encrypted: true }),
         };
 
         setPrivateChats((prev) => ({
@@ -94,7 +130,6 @@ function Chat() {
       return;
     }
 
-    // Envio público
     socket.current.emit("mensagem", mensagem);
     setMensagem("");
   };
@@ -118,6 +153,29 @@ function Chat() {
     }
   };
 
+  const toggleDecrypt = (msg, idx) => {
+    if (!msg.iv || !msg.chave) return;
+
+    try {
+      const texto = descriptografarAES({
+        content: msg.content,
+        chave: msg.chave,
+        iv: msg.iv,
+      });
+
+      setPrivateChats((prev) => {
+        const usuario = selectedUser;
+        const novo = [...(prev[usuario] || [])];
+        novo[idx] = { ...msg, content: texto, iv: null, chave: null };
+        return { ...prev, [usuario]: novo };
+      });
+    } catch {
+      enqueueSnackbar("Erro ao descriptografar a mensagem", {
+        variant: "error",
+      });
+    }
+  };
+
   const renderMessage = (msg, idx) => {
     const time = new Date(msg.timestamp).toLocaleTimeString();
     const isOwnMessage = msg.author === nickname;
@@ -132,10 +190,11 @@ function Chat() {
       maxWidth: "70%",
       padding: "8px 12px",
       borderRadius: 10,
-      background: isOwnMessage ? "#cce5ff" : "#e2e2e2",
+      background: isOwnMessage ? "#cce5ff" : "#f0ddee",
       textAlign: "left",
       color: "#000",
       fontSize: 14,
+      cursor: msg.iv && msg.chave ? "pointer" : "default",
     };
 
     switch (msg.type) {
@@ -158,10 +217,48 @@ function Chat() {
           </div>
         );
       case "private":
+        const isEncrypted = msg.iv && msg.chave;
+
+        const encryptedStyle = {
+          background: "#ffe0b3",
+          whiteSpace: "pre-wrap",
+          cursor: isEncrypted ? "pointer" : "default",
+          border: "1px dashed #c48f00",
+          display: "flex",
+          gap: "8px",
+        };
+
         return (
           <div key={idx} style={messageStyle}>
-            <div style={{ ...bubbleStyle, background: "#f0ddee" }}>
-              🔒 <strong>{msg.author}</strong>: {msg.content}
+            <div
+              style={{ ...bubbleStyle, ...(isEncrypted ? encryptedStyle : {}) }}
+              onClick={() => isEncrypted && toggleDecrypt(msg, idx)}
+              title={isEncrypted ? "Clique para ver a mensagem" : undefined}
+            >
+              {/* COLUNA 1: Nome */}
+              <div
+                style={{
+                  fontWeight: "bold",
+                  minWidth: 80,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "center",
+                }}
+              >
+                {msg.author}
+              </div>
+
+              {/* COLUNA 2: Mensagem */}
+              <div>
+                {isEncrypted ? (
+                  <>
+                    <div>🔐 Clique para descriptografar</div>
+                    <div>{msg.content.slice(0, 12)}...</div>
+                  </>
+                ) : (
+                  <div>{msg.content}</div>
+                )}
+              </div>
             </div>
           </div>
         );
@@ -239,12 +336,20 @@ function Chat() {
             <div ref={chatEndRef} />
           </div>
 
-          <input
-            value={mensagem}
-            onChange={(e) => setMensagem(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && enviarMensagem()}
-          />
-          <button onClick={enviarMensagem}>Enviar</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              style={{ flex: 1 }}
+              value={mensagem}
+              onChange={(e) => setMensagem(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && enviarMensagem()}
+            />
+            <button onClick={enviarMensagem}>Enviar</button>
+            {selectedUser && (
+              <button onClick={() => setUseCrypto(!useCrypto)}>
+                {!useCrypto ? "🔓 Simples" : "🔐 Criptografado"}
+              </button>
+            )}
+          </div>
         </>
       )}
     </div>
