@@ -1,7 +1,17 @@
 const { Server } = require("socket.io");
 const comandos = require("./commands");
 
-const clientes = new Map();
+const clientes = new Map(); // socket.id => { nome, socket, isLoggedIn, destinatarioPrivado }
+
+function createMessage({ type, author = null, content, recipient = null }) {
+  return {
+    type,
+    author,
+    content,
+    recipient,
+    timestamp: Date.now(),
+  };
+}
 
 function configurarSockets(server) {
   const io = new Server(server, {
@@ -10,7 +20,14 @@ function configurarSockets(server) {
 
   io.on("connection", (socket) => {
     console.log(`[+] Cliente conectado: ${socket.id}`);
-    socket.emit("mensagem", comandos.LOGIN_TELA);
+
+    socket.emit(
+      "mensagem",
+      createMessage({
+        type: "system",
+        content: comandos.LOGIN_TELA,
+      })
+    );
 
     socket.on("mensagem", (mensagem) => {
       const cliente = clientes.get(socket.id);
@@ -21,18 +38,59 @@ function configurarSockets(server) {
         const nomesExistentes = [...clientes.values()].map((c) => c.nome);
 
         if (!nome || nomesExistentes.includes(nome)) {
-          socket.emit("mensagem", comandos.LOGIN_NEGADO);
+          socket.emit(
+            "mensagem",
+            createMessage({
+              type: "login",
+              content: comandos.LOGIN_NEGADO,
+            })
+          );
         } else {
-          clientes.set(socket.id, { nome, socket });
-          socket.emit("mensagem", comandos.LOGIN_ACEITO);
-          socket.emit("mensagem", `Olá ${nome}`);
-          io.emit("mensagem", `🔔 ${nome} entrou no chat.`);
+          clientes.set(socket.id, {
+            nome,
+            socket,
+            isLoggedIn: true,
+            destinatarioPrivado: null,
+          });
+
+          socket.emit(
+            "mensagem",
+            createMessage({
+              type: "login",
+              content: comandos.LOGIN_ACEITO,
+            })
+          );
+
+          socket.emit(
+            "mensagem",
+            createMessage({
+              type: "system",
+              content: `Olá ${nome}`,
+            })
+          );
+
           console.log(`[LOGIN] ${nome} entrou.`);
+
+          // Notifica os outros
+          for (const c of clientes.values()) {
+            if (c.isLoggedIn && c.socket.id !== socket.id) {
+              c.socket.emit(
+                "mensagem",
+                createMessage({
+                  type: "system",
+                  author: nome,
+                  content: `${nome} entrou no chat.`,
+                })
+              );
+            }
+          }
         }
         return;
       }
 
-      const { nome } = cliente;
+      const clienteAtual = clientes.get(socket.id);
+      const { nome, isLoggedIn } = clienteAtual;
+      if (!isLoggedIn) return;
 
       // SAIR
       if (mensagem === comandos.SAIR) {
@@ -42,39 +100,97 @@ function configurarSockets(server) {
 
       // LISTA DE CLIENTES
       if (mensagem === comandos.LISTA_USUARIOS) {
-        const nomes = [...clientes.values()].map((c) => c.nome).join(", ");
-        socket.emit("mensagem", `Usuários online: ${nomes}`);
+        const lista = [...clientes.values()].map((c) => c.nome).join(", ");
+        socket.emit(
+          "mensagem",
+          createMessage({
+            type: "system",
+            content: `Usuários online: ${lista}`,
+          })
+        );
         return;
       }
 
-      // MENSAGEM PRIVADA
+      // COMANDO /tell <nome>
       if (mensagem.startsWith(comandos.MENSAGEM)) {
         const nomeDest = mensagem.slice(comandos.MENSAGEM.length).trim();
         const destino = [...clientes.values()].find((c) => c.nome === nomeDest);
 
         if (!destino) {
-          socket.emit("mensagem", `Usuário ${nomeDest} não encontrado.`);
+          socket.emit(
+            "mensagem",
+            createMessage({
+              type: "system",
+              content: `Usuário ${nomeDest} não encontrado.`,
+            })
+          );
         } else {
-          socket.emit("mensagem", `Digite a mensagem para ${nomeDest}:`);
-          socket.once("mensagem", (resposta) => {
-            destino.socket.emit("mensagem", `<${nome}> (privado): ${resposta}`);
-          });
+          clienteAtual.destinatarioPrivado = nomeDest;
+
+          socket.emit(
+            "mensagem",
+            createMessage({
+              type: "system",
+              content: `Digite a mensagem para ${nomeDest}:`,
+            })
+          );
         }
         return;
       }
 
-      // MENSAGEM BROADCAST
+      // MENSAGEM PRIVADA se destinatário estiver setado
+      if (clienteAtual.destinatarioPrivado) {
+        const nomeDest = clienteAtual.destinatarioPrivado;
+        const destino = [...clientes.values()].find((c) => c.nome === nomeDest);
+
+        if (destino && destino.isLoggedIn) {
+          const msgPrivada = createMessage({
+            type: "private",
+            author: nome,
+            recipient: nomeDest,
+            content: mensagem,
+          });
+
+          destino.socket.emit("mensagem", msgPrivada); // para o destinatário
+          socket.emit("mensagem", msgPrivada); // feedback para o remetente
+        }
+
+        clienteAtual.destinatarioPrivado = null; // limpa o estado
+        return;
+      }
+
+      // MENSAGEM PÚBLICA
+      const msgPublica = createMessage({
+        type: "message",
+        author: nome,
+        content: mensagem,
+      });
+
       for (const c of clientes.values()) {
-        c.socket.emit("mensagem", `<${nome}>: ${mensagem}`);
+        if (c.isLoggedIn) {
+          c.socket.emit("mensagem", msgPublica);
+        }
       }
     });
 
     socket.on("disconnect", () => {
       const cliente = clientes.get(socket.id);
-      if (cliente) {
+      if (cliente && cliente.isLoggedIn) {
         console.log(`[-] ${cliente.nome} saiu.`);
-        io.emit("mensagem", `⚠️ ${cliente.nome} saiu do chat.`);
         clientes.delete(socket.id);
+
+        for (const c of clientes.values()) {
+          if (c.isLoggedIn) {
+            c.socket.emit(
+              "mensagem",
+              createMessage({
+                type: "logout",
+                author: cliente.nome,
+                content: `${cliente.nome} saiu do chat.`,
+              })
+            );
+          }
+        }
       }
     });
   });
