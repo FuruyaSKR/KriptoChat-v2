@@ -53,7 +53,6 @@ function configurarSockets(server) {
     socket.on("mensagem", (mensagem) => {
       const cliente = clientes.get(socket.id);
 
-      // LOGIN
       if (!cliente) {
         const nome = mensagem.trim().replace(/,/g, "");
         const nomesExistentes = [...clientes.values()].map((c) => c.nome);
@@ -113,13 +112,11 @@ function configurarSockets(server) {
       const { nome, isLoggedIn } = clienteAtual;
       if (!isLoggedIn) return;
 
-      // SAIR
       if (mensagem === comandos.SAIR) {
         socket.disconnect();
         return;
       }
 
-      // LISTA DE CLIENTES
       if (mensagem === comandos.LISTA_USUARIOS) {
         const lista = [...clientes.values()].map((c) => c.nome).join(", ");
         socket.emit(
@@ -132,7 +129,6 @@ function configurarSockets(server) {
         return;
       }
 
-      // COMANDO /tell <nome>
       if (mensagem.startsWith(comandos.MENSAGEM)) {
         const nomeDest = mensagem.slice(comandos.MENSAGEM.length).trim();
         const destino = [...clientes.values()].find((c) => c.nome === nomeDest);
@@ -159,7 +155,6 @@ function configurarSockets(server) {
         return;
       }
 
-      // COMANDO /tellcript <nome>
       if (mensagem.startsWith(comandos.MENSAGEM_CRIPT)) {
         const nomeDest = mensagem.slice(comandos.MENSAGEM_CRIPT.length).trim();
         const destino = [...clientes.values()].find((c) => c.nome === nomeDest);
@@ -187,7 +182,6 @@ function configurarSockets(server) {
         return;
       }
 
-      // MENSAGEM PRIVADA se destinatário estiver setado
       if (clienteAtual.destinatarioPrivado) {
         const nomeDest = clienteAtual.destinatarioPrivado;
         const destino = [...clientes.values()].find((c) => c.nome === nomeDest);
@@ -225,7 +219,6 @@ function configurarSockets(server) {
         return;
       }
 
-      // MENSAGEM PÚBLICA
       const msgPublica = createMessage({
         type: "message",
         author: nome,
