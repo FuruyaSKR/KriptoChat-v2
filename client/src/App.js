@@ -6,21 +6,6 @@ import Home from './pages/Home';
 
 const socketURL = 'http://localhost:8888';
 
-function gerarChaveAES() {
-  const chave = CryptoJS.lib.WordArray.random(16);
-  const iv = CryptoJS.lib.WordArray.random(16);
-  return { chave, iv };
-}
-
-function criptografarAES(texto, chave, iv) {
-  const encrypted = CryptoJS.AES.encrypt(texto, chave, {
-    iv: iv,
-    mode: CryptoJS.mode.CBC,
-    padding: CryptoJS.pad.Pkcs7,
-  });
-  return encrypted.ciphertext.toString(CryptoJS.enc.Hex);
-}
-
 function descriptografarAES({ content, chave, iv }) {
   const key = CryptoJS.enc.Hex.parse(chave);
   const ivBytes = CryptoJS.enc.Hex.parse(iv);
